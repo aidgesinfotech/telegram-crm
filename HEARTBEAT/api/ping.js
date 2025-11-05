@@ -3,7 +3,7 @@
 
 export default async function handler(req, res) {
   try {
-    const target = ""; // e.g., https://api.yourdomain.com/health
+    const target = "http://telegram-crm.onrender.com/"; // e.g., https://api.yourdomain.com/health
     if (!target) {
       return res.status(500).json({ error: 'TARGET_URL env not set' });
     }
