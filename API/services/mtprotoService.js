@@ -13,7 +13,7 @@ try {
   // dependency missing; functions will throw when used
 }
 
-const state = new Map(); // deviceId -> { client, phone, phoneCodeHash, handlerAttached }
+const state = new Map(); // deviceId -> { client, phone, phoneCodeHash, handlerAttached, creatingPromise }
 const updates = new EventEmitter(); // emits { deviceId, chatId, messageId, text, raw }
 
 function ensureDeps(){
@@ -23,13 +23,19 @@ function ensureDeps(){
 
 async function getClientForDevice(deviceId){
   ensureDeps();
-  const existing = state.get(deviceId);
-  if (existing && existing.client) return existing.client;
-  const sessRow = await DeviceSessions.getPrimary(deviceId);
-  const sessionStr = sessRow && sessRow.session_data ? (decrypt(sessRow.session_data).session || '') : '';
-  const client = new TelegramClient(new StringSession(sessionStr), Number(process.env.API_ID), String(process.env.API_HASH), { connectionRetries: 3 });
-  await client.connect();
-  return client;
+  const st = state.get(deviceId) || {};
+  if (st.client) return st.client;
+  if (st.creatingPromise) return await st.creatingPromise;
+  const creating = (async ()=>{
+    const sessRow = await DeviceSessions.getPrimary(deviceId);
+    const sessionStr = sessRow && sessRow.session_data ? (decrypt(sessRow.session_data).session || '') : '';
+    const client = new TelegramClient(new StringSession(sessionStr), Number(process.env.API_ID), String(process.env.API_HASH), { connectionRetries: 3 });
+    await client.connect();
+    state.set(deviceId, { ...(state.get(deviceId) || {}), client, creatingPromise: null });
+    return client;
+  })();
+  state.set(deviceId, { ...(state.get(deviceId) || {}), creatingPromise: creating });
+  return await creating;
 }
 
 async function ensureUpdateHandler(deviceId){
@@ -181,11 +187,22 @@ async function list(){
 
 async function listDialogs(deviceId){
   ensureDeps();
-  const client = await getClientForDevice(deviceId);
+  let client = await getClientForDevice(deviceId);
   let dialogs = [];
   try{
     dialogs = await client.getDialogs({});
-  }catch(e){ dialogs = []; }
+  }catch(e){
+    const msg = String(e && (e.message || e) || '').toUpperCase();
+    // Recover from AUTH_KEY_DUPLICATED by resetting client once
+    if (msg.includes('AUTH_KEY_DUPLICATED')){
+      try{ await client.disconnect?.(); }catch(_e){}
+      state.set(deviceId, {});
+      client = await getClientForDevice(deviceId);
+      try{ dialogs = await client.getDialogs({}); }catch(_e2){ dialogs = []; }
+    } else {
+      dialogs = [];
+    }
+  }
   const items = [];
   try{
     for (const d of dialogs){
