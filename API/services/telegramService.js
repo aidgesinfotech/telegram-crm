@@ -184,6 +184,17 @@ async function restartAndRegister(botId){
   return { status: 'ok' };
 }
 
+// Ensure a bot instance is running; best-effort webhook registration
+async function ensureBot(botId){
+  let inst = instances.get(botId);
+  if (inst) return inst;
+  const b = await Bots.getById(botId);
+  if (!b || !b.token) throw new Error('Bot not found');
+  inst = await startBot(botId, b.token, b.name);
+  try { await registerWebhook(botId); } catch(_e) { /* ignore webhook registration failure */ }
+  return inst;
+}
+
 async function sendBulkMessages(botId, targets, text) {
   const inst = instances.get(botId);
   if (!inst) throw new Error('Bot not running');
